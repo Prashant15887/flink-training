@@ -21,8 +21,17 @@ package org.apache.flink.training.exercises.longrides;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+/*import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;*/
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+/*import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.typeutils.TupleTypeInfo;*/
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.streaming.api.TimerService;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.streaming.api.functions.sink.PrintSinkFunction;
@@ -30,10 +39,12 @@ import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
-import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
+//import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
 import org.apache.flink.util.Collector;
-
+import org.apache.flink.util.OutputTag;
 import java.time.Duration;
+import java.time.Instant;
+//import java.util.OptionalLong;
 
 /**
  * The "Long Ride Alerts" exercise.
@@ -46,6 +57,7 @@ import java.time.Duration;
 public class LongRidesExercise {
     private final SourceFunction<TaxiRide> source;
     private final SinkFunction<Long> sink;
+    private static final OutputTag<TaxiRide> lateRides = new OutputTag<TaxiRide>("lateRides") {};
 
     /** Creates a job using the source and sink provided. */
     public LongRidesExercise(SourceFunction<TaxiRide> source, SinkFunction<Long> sink) {
@@ -74,10 +86,12 @@ public class LongRidesExercise {
                                 (ride, streamRecordTimestamp) -> ride.getEventTimeMillis());
 
         // create the pipeline
-        rides.assignTimestampsAndWatermarks(watermarkStrategy)
+        SingleOutputStreamOperator longRides = rides.assignTimestampsAndWatermarks(watermarkStrategy)
                 .keyBy(ride -> ride.rideId)
-                .process(new AlertFunction())
-                .addSink(sink);
+                .process(new AlertFunction());
+
+        longRides.addSink(sink);
+        longRides.getSideOutput(lateRides).print();
 
         // execute the pipeline and return the result
         return env.execute("Long Taxi Rides");
@@ -98,17 +112,59 @@ public class LongRidesExercise {
     @VisibleForTesting
     public static class AlertFunction extends KeyedProcessFunction<Long, TaxiRide, Long> {
 
+        private transient ValueState<Instant> rideStartTime;
+        private transient ValueState<Instant> rideEndTime;
+
         @Override
         public void open(Configuration config) throws Exception {
-            throw new MissingSolutionException();
+            ValueStateDescriptor<Instant> startTimeDesc = new ValueStateDescriptor<>("Start time of ride", Instant.class);
+            ValueStateDescriptor<Instant> endTimeDesc = new ValueStateDescriptor<>("End time of ride", Instant.class);
+            rideStartTime = getRuntimeContext().getState(startTimeDesc);
+            rideEndTime = getRuntimeContext().getState(endTimeDesc);
         }
 
         @Override
         public void processElement(TaxiRide ride, Context context, Collector<Long> out)
-                throws Exception {}
+                throws Exception {
+            TimerService timerService = context.timerService();
+
+            if (ride.eventTime.toEpochMilli() > timerService.currentWatermark()) {
+                if (ride.isStart) {
+                    if (rideEndTime.value() != null) {
+                        if (Duration.between(ride.eventTime, rideEndTime.value()).compareTo(Duration.ofHours(2)) > 0) {
+                            out.collect(context.getCurrentKey());
+                        }
+                        rideEndTime.clear();
+                    }
+                    else {
+                        timerService.registerEventTimeTimer(ride.eventTime.plusSeconds(120 * 60).toEpochMilli());
+                        rideStartTime.update(ride.eventTime);
+                    }
+                }
+                else {
+                    if (rideStartTime.value() != null) {
+                        if (Duration.between(rideStartTime.value(), ride.eventTime).compareTo(Duration.ofHours(2)) > 0) {
+                            out.collect(context.getCurrentKey());
+                        }
+                        timerService.deleteEventTimeTimer(rideStartTime.value().plusSeconds(120 * 60).toEpochMilli());
+                        rideStartTime.clear();
+                    }
+                    else {
+                        rideEndTime.update(ride.eventTime);
+                    }
+                }
+            }
+            else {
+                context.output(lateRides, ride);
+            }
+        }
 
         @Override
         public void onTimer(long timestamp, OnTimerContext context, Collector<Long> out)
-                throws Exception {}
+                throws Exception {
+            out.collect(context.getCurrentKey());
+            rideStartTime.clear();
+            rideEndTime.clear();
+        }
     }
 }

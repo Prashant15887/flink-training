@@ -26,7 +26,8 @@ import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
-import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
+//import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
+import static org.apache.flink.training.exercises.common.utils.GeoUtils.isInNYC;
 
 /**
  * The Ride Cleansing exercise from the Flink training.
@@ -80,7 +81,9 @@ public class RideCleansingExercise {
     public static class NYCFilter implements FilterFunction<TaxiRide> {
         @Override
         public boolean filter(TaxiRide taxiRide) throws Exception {
-            throw new MissingSolutionException();
+            //throw new MissingSolutionException();
+            return isInNYC(taxiRide.startLon, taxiRide.startLat) && isInNYC(taxiRide.endLon, taxiRide.endLat);
+            //return false;
         }
     }
 }

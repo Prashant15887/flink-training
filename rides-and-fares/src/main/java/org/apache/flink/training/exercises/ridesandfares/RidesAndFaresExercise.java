@@ -19,6 +19,8 @@
 package org.apache.flink.training.exercises.ridesandfares;
 
 import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -31,7 +33,6 @@ import org.apache.flink.training.exercises.common.datatypes.TaxiFare;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiFareGenerator;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
-import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
 import org.apache.flink.util.Collector;
 
 /**
@@ -98,20 +99,38 @@ public class RidesAndFaresExercise {
 
     public static class EnrichmentFunction
             extends RichCoFlatMapFunction<TaxiRide, TaxiFare, RideAndFare> {
+        private ValueState<TaxiRide> rideState;
+        private ValueState<TaxiFare> fareState;
 
         @Override
         public void open(Configuration config) throws Exception {
-            throw new MissingSolutionException();
+            //throw new MissingSolutionException();
+            rideState = getRuntimeContext().getState(new ValueStateDescriptor<>("rideState", TaxiRide.class));
+            fareState = getRuntimeContext().getState(new ValueStateDescriptor<>("fareState", TaxiFare.class));
         }
 
         @Override
         public void flatMap1(TaxiRide ride, Collector<RideAndFare> out) throws Exception {
-            throw new MissingSolutionException();
+            //throw new MissingSolutionException();
+            if (fareState.value() != null){
+                out.collect(new RideAndFare(ride, fareState.value()));
+                fareState.clear();
+            }
+            else {
+                rideState.update(ride);
+            }
         }
 
         @Override
         public void flatMap2(TaxiFare fare, Collector<RideAndFare> out) throws Exception {
-            throw new MissingSolutionException();
+            //throw new MissingSolutionException();
+            if (rideState.value() != null){
+                out.collect(new RideAndFare(rideState.value(), fare));
+                rideState.clear();
+            }
+            else {
+                fareState.update(fare);
+            }
         }
     }
 }
